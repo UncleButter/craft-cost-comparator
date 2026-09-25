@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse / VS Code
+.classpath
+.project
+.settings/
+.vscode/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Local-only: the research scripts used to generate the recipe data, and the
+# plain-text copy of the README. Neither belongs in the distributed plugin.
+tools/
+README.txt
