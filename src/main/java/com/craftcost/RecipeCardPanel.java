@@ -207,7 +207,7 @@ class RecipeCardPanel extends JPanel
 		return row;
 	}
 
-	private JPanel buildIngredientRow(Ingredient ingredient, int owned, int price, int actions)
+	private JPanel buildIngredientRow(Ingredient ingredient, int owned, long price, int actions)
 	{
 		JPanel row = new JPanel(new GridBagLayout());
 		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -335,11 +335,12 @@ class RecipeCardPanel extends JPanel
 
 		clientThread.invoke(() ->
 		{
-			int finishedUnitPrice = offerPrice != null ? offerPrice : itemManager.getItemPrice(recipe.getItemId());
-			long finishedTotalPrice = (long) finishedUnitPrice * amount;
+			// ItemManager.getItemPrice returns a long as of RuneLite 1.13.0.
+			long finishedUnitPrice = offerPrice != null ? offerPrice : itemManager.getItemPrice(recipe.getItemId());
+			long finishedTotalPrice = finishedUnitPrice * amount;
 
 			int count = recipe.getIngredients().size();
-			int[] prices = new int[count];
+			long[] prices = new long[count];
 			int[] owned = new int[count];
 			long totalFromScratch = 0;
 			long totalAccountingOwned = 0;
@@ -368,7 +369,7 @@ class RecipeCardPanel extends JPanel
 		});
 	}
 
-	private void render(long finishedTotalPrice, int[] prices, int[] owned, int amount, int actions, long totalFromScratch,
+	private void render(long finishedTotalPrice, long[] prices, int[] owned, int amount, int actions, long totalFromScratch,
 		long totalAccountingOwned, int currentLevel, QuestState questState)
 	{
 		priceLabel.setText(GP_FORMAT.format(finishedTotalPrice) + " gp to buy");
