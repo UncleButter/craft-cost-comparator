@@ -172,10 +172,6 @@ public class CraftCostPlugin extends Plugin
 		{
 			checkGeQuantity();
 		}
-		else if (event.getVarbitId() == VarbitID.GE_NEWOFFER_PRICE)
-		{
-			checkGePrice();
-		}
 	}
 
 	private void checkGeItem()
@@ -193,9 +189,8 @@ public class CraftCostPlugin extends Plugin
 		if (recipe != null)
 		{
 			panel.autoAddFromGe(recipe);
-			// pick up whatever quantity/price is already showing, not just future changes
+			// pick up whatever quantity is already showing, not just future changes
 			checkGeQuantity();
-			checkGePrice();
 		}
 	}
 
@@ -224,29 +219,14 @@ public class CraftCostPlugin extends Plugin
 		}
 	}
 
-	private void checkGePrice()
-	{
-		if (!config.autoShowGeItem())
-		{
-			return;
-		}
-
-		int itemId = client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH);
-		Recipe recipe = RecipeDatabase.findByItemId(itemId);
-		if (recipe == null)
-		{
-			return;
-		}
-
-		// GE_NEWOFFER_PRICE is the same kind of live varbit as
-		// GE_NEWOFFER_QUANTITY - it updates as the price-per-item box is typed
-		// into or nudged with +/-, before the offer is submitted.
-		int price = client.getVarbitValue(VarbitID.GE_NEWOFFER_PRICE);
-		if (price > 0)
-		{
-			panel.autoSetPrice(recipe, price);
-		}
-	}
+	// Live price-per-item syncing used to read varbit GE_NEWOFFER_PRICE (4398)
+	// alongside GE_NEWOFFER_QUANTITY. That varbit no longer exists - RuneLite
+	// generates VarbitID from the game cache, and 4398 was dropped after
+	// 1.13.0 - so there is nothing left to read and the feature is disabled.
+	// Quantity syncing is unaffected; GE_NEWOFFER_QUANTITY (4396) is still
+	// present. CraftCostPanel.autoSetPrice and RecipeCardPanel.setLivePrice are
+	// deliberately left in place, ready to be rewired if a replacement source
+	// for the live offer price is found.
 
 	/**
 	 * Whether the panel's "Auto-show GE item" checkbox should be ticked -
