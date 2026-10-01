@@ -182,24 +182,24 @@ public class CraftCostPlugin extends Plugin
 			geOfferPrice.logChangedVars(client);
 		}
 
-		// Each field is only read when the game has just written the var that
-		// carries it. That matters most for the price: the offers interface is
-		// open the whole time you're standing at a booth, not just while an offer
-		// is being composed, so the price varbit usually holds a value left over
-		// from the last offer. Reading it on an unrelated change applies that
-		// stale number to whatever you're looking at now.
 		if (event.getVarpId() == VarPlayerID.TRADINGPOST_SEARCH)
 		{
 			checkGeItem();
+			return;
 		}
-		else if (event.getVarbitId() == VarbitID.GE_NEWOFFER_QUANTITY)
+
+		if (event.getVarbitId() == VarbitID.GE_NEWOFFER_QUANTITY)
 		{
 			checkGeQuantity();
 		}
-		else if (event.getVarbitId() == GeOfferPrice.NEWOFFER_PRICE_VARBIT)
-		{
-			checkGePrice();
-		}
+
+		// The price can't be matched to an event the way the quantity can - that
+		// event never carries its varbit id - so it gets polled on any change
+		// instead. That's only safe because GeOfferPrice.read refuses to report a
+		// price unless the offer-setup screen is up and the player has actually
+		// moved it; polling it unguarded is what made 1.0.2 show prices left over
+		// from previous offers.
+		checkGePrice();
 	}
 
 	private void checkGeItem()

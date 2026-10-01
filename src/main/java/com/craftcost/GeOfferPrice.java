@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.IndexDataBase;
 import net.runelite.api.VarbitComposition;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 
 /**
@@ -31,9 +32,9 @@ final class GeOfferPrice
 	 * Varbit that holds the live price-per-item on the offer-setup screen.
 	 * {@code VarbitID.GE_NEWOFFER_PRICE} in RuneLite 1.13.0 and earlier.
 	 * <p>
-	 * The plugin matches incoming var changes against this, so it only ever uses
-	 * the value when the game has just written it. Reading it at any other time
-	 * gets whatever the last offer left behind.
+	 * Unlike the quantity, this one never arrives as a varbit-flavoured
+	 * {@code VarbitChanged} - see {@link #read} for what that means for how it
+	 * has to be read.
 	 */
 	static final int NEWOFFER_PRICE_VARBIT = 4398;
 
@@ -59,6 +60,15 @@ final class GeOfferPrice
 	 */
 	private Boolean priceVarbitPresent;
 
+	/** Whether the offer-setup screen was showing last time {@link #read} looked. */
+	private boolean setupVisible;
+
+	/** What the price box held when the setup screen opened, i.e. the guide price. */
+	private Integer openingPrice;
+
+	/** Set once the player has moved the price off {@link #openingPrice}. */
+	private boolean priceEdited;
+
 	/** Varp index to the varbits living inside it, built lazily for diagnostics. */
 	private Map<Integer, List<Integer>> varbitsByVarp;
 
@@ -66,8 +76,28 @@ final class GeOfferPrice
 	private int[] varpSnapshot;
 
 	/**
-	 * The live price-per-item, or 0 if it can't be determined. Must be called on
-	 * the client thread.
+	 * The price-per-item the player has entered on the offer-setup screen, or 0
+	 * if there isn't one to trust yet. Must be called on the client thread.
+	 *
+	 * <p>Two things make this more involved than reading the varbit.
+	 *
+	 * <p>First, the quantity can be picked up by matching
+	 * {@code VarbitChanged.getVarbitId()} against its varbit, but the price
+	 * cannot - that event never carries this id. A price needs about 31 bits, so
+	 * it occupies essentially the whole varp and the game writes the varp
+	 * directly rather than packing bits into it, which is also the likeliest
+	 * reason the name was dropped from the cache in the first place: as a
+	 * "varbit" spanning its entire host, it is degenerate. So the value has to be
+	 * polled rather than waited for.
+	 *
+	 * <p>Second, polling it is only safe with a guard. The offers interface is
+	 * open the whole time the player is standing at a booth, and the varbit keeps
+	 * the last offer's price, so a poll at the wrong moment reports a price from
+	 * a completely unrelated offer. Hence the two conditions below: the
+	 * offer-setup screen has to actually be on screen, and the value has to have
+	 * moved off whatever it held when that screen opened. The opening value is
+	 * the guide price the box is pre-filled with, which is what the card shows
+	 * anyway, so nothing is lost by ignoring it until the player changes it.
 	 */
 	int read(Client client)
 	{
@@ -76,12 +106,50 @@ final class GeOfferPrice
 			return 0;
 		}
 
+		if (!isOfferSetupVisible(client))
+		{
+			setupVisible = false;
+			openingPrice = null;
+			priceEdited = false;
+			return 0;
+		}
+
+		int price = rawRead(client);
+		if (price <= 0)
+		{
+			return 0;
+		}
+
+		if (!setupVisible)
+		{
+			// The setup screen has just appeared. Whatever is in the box now is
+			// the pre-filled guide price, not something the player chose.
+			setupVisible = true;
+			openingPrice = price;
+			return 0;
+		}
+
+		if (!priceEdited)
+		{
+			if (openingPrice != null && price == openingPrice)
+			{
+				return 0;
+			}
+			priceEdited = true;
+		}
+
+		return price;
+	}
+
+	/** The varbit's current value, or 0 if it can't be read. */
+	private int rawRead(Client client)
+	{
 		try
 		{
 			int price = client.getVarbitValue(NEWOFFER_PRICE_VARBIT);
-			// 0 is "nothing entered yet"; a negative value would mean we're
-			// reading bits that no longer mean what we think they mean, and
-			// showing a nonsense price is worse than showing the guide price.
+			// A negative value would mean we're reading bits that no longer mean
+			// what we think they mean, and showing a nonsense price is worse
+			// than showing the guide price.
 			return price > 0 ? price : 0;
 		}
 		catch (RuntimeException e)
@@ -89,6 +157,23 @@ final class GeOfferPrice
 			log.debug("Craft Cost: reading the GE offer price varbit failed", e);
 			priceVarbitPresent = Boolean.FALSE;
 			return 0;
+		}
+	}
+
+	/**
+	 * Whether the offer-setup screen - the one with the quantity and price boxes
+	 * on it - is actually showing, as opposed to the offers list behind it.
+	 */
+	private boolean isOfferSetupVisible(Client client)
+	{
+		try
+		{
+			Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+			return setup != null && !setup.isHidden();
+		}
+		catch (RuntimeException e)
+		{
+			return false;
 		}
 	}
 
@@ -137,6 +222,9 @@ final class GeOfferPrice
 		priceVarbitPresent = null;
 		varbitsByVarp = null;
 		varpSnapshot = null;
+		setupVisible = false;
+		openingPrice = null;
+		priceEdited = false;
 	}
 
 	// ------------------------------------------------------------------
