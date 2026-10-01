@@ -182,22 +182,24 @@ public class CraftCostPlugin extends Plugin
 			geOfferPrice.logChangedVars(client);
 		}
 
+		// Each field is only read when the game has just written the var that
+		// carries it. That matters most for the price: the offers interface is
+		// open the whole time you're standing at a booth, not just while an offer
+		// is being composed, so the price varbit usually holds a value left over
+		// from the last offer. Reading it on an unrelated change applies that
+		// stale number to whatever you're looking at now.
 		if (event.getVarpId() == VarPlayerID.TRADINGPOST_SEARCH)
 		{
-			// Switching to a different item resets what the quantity and price
-			// boxes mean, so checkGeItem re-reads both for the new item.
 			checkGeItem();
-			return;
 		}
-
-		// Everything below is cheap - a couple of var reads and two no-op-if-
-		// unchanged setters - so rather than matching on the varbit that carries
-		// each field, just re-read them on any change while the screen is open.
-		// GE_NEWOFFER_QUANTITY survived the 1.13.1 constant cull and the price
-		// varbit didn't, and matching on ids we can't name is how the price sync
-		// broke silently the first time.
-		checkGeQuantity();
-		checkGePrice();
+		else if (event.getVarbitId() == VarbitID.GE_NEWOFFER_QUANTITY)
+		{
+			checkGeQuantity();
+		}
+		else if (event.getVarbitId() == GeOfferPrice.NEWOFFER_PRICE_VARBIT)
+		{
+			checkGePrice();
+		}
 	}
 
 	private void checkGeItem()
@@ -215,9 +217,10 @@ public class CraftCostPlugin extends Plugin
 		if (recipe != null)
 		{
 			panel.autoAddFromGe(recipe);
-			// pick up whatever's already showing, not just future changes
+			// Pick up the quantity already showing, not just future changes.
+			// Deliberately not the price: nothing has been typed for this item
+			// yet, so the price varbit still holds the previous offer's value.
 			checkGeQuantity();
-			checkGePrice();
 		}
 	}
 

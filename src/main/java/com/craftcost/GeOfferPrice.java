@@ -30,8 +30,12 @@ final class GeOfferPrice
 	/**
 	 * Varbit that holds the live price-per-item on the offer-setup screen.
 	 * {@code VarbitID.GE_NEWOFFER_PRICE} in RuneLite 1.13.0 and earlier.
+	 * <p>
+	 * The plugin matches incoming var changes against this, so it only ever uses
+	 * the value when the game has just written it. Reading it at any other time
+	 * gets whatever the last offer left behind.
 	 */
-	private static final int NEWOFFER_PRICE_VARBIT = 4398;
+	static final int NEWOFFER_PRICE_VARBIT = 4398;
 
 	/** Cache archive holding varbit definitions - the id RuneLite's Var Inspector uses. */
 	private static final int VARBITS_ARCHIVE = 14;
