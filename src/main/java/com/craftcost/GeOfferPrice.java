@@ -2,6 +2,7 @@ package com.craftcost;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -9,240 +10,249 @@ import net.runelite.api.Client;
 import net.runelite.api.IndexDataBase;
 import net.runelite.api.VarbitComposition;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 
 /**
- * Reads the price-per-item currently showing on the Grand Exchange offer-setup
- * screen, while it's being typed and before the offer is confirmed.
+ * Reads the price-per-item showing on the Grand Exchange offer-setup screen,
+ * while it's being set and before the offer is confirmed.
  *
- * <p>This used to be a one-liner against {@code VarbitID.GE_NEWOFFER_PRICE}.
- * That constant disappeared in RuneLite 1.13.1 and the plugin stopped building,
- * so the price sync was ripped out as a stopgap. The constant going away is not
- * the same as the varbit going away, though: the {@code gameval} classes are
- * generated from the symbol names shipped in the game cache, and this varbit
- * simply lost its name there while 4396 and 4397 either side of it kept theirs.
- * So the id is read directly, guarded by a runtime check that it still exists,
- * which also means this file keeps compiling whatever the client does to its
- * generated constants next.
+ * <p>This reads the number out of the box on screen rather than out of a game
+ * variable, which took an embarrassing number of attempts to arrive at. The
+ * short version: there is no variable to read. RuneLite exposed one as
+ * {@code VarbitID.GE_NEWOFFER_PRICE} up to 1.13.0, the constant disappeared in
+ * 1.13.1, and watching every var the client writes while the price is adjusted
+ * shows nothing moving but the clock. The varbit isn't renamed or relocated -
+ * {@code Client.getVarbit} reports it isn't in the cache at all. The quantity is
+ * still a varbit ({@link VarbitID#GE_NEWOFFER_QUANTITY}, and the offer item is
+ * still a varp, but the price lives only in the interface until the offer is
+ * confirmed.
+ *
+ * <p>Reading the box has a second advantage worth more than the varbit ever was:
+ * it's the number the player can see. The minus and plus buttons, both pairs of
+ * percentage buttons, whatever percentages they've configured, and a typed-in
+ * value all go through it, so none of them need to be understood separately.
  */
 @Slf4j
 final class GeOfferPrice
 {
+	/** Group id of the offer screens, {@code InterfaceID.GE_OFFERS}. */
+	private static final int GE_OFFERS_GROUP = 465;
+
 	/**
-	 * Varbit that holds the live price-per-item on the offer-setup screen.
-	 * {@code VarbitID.GE_NEWOFFER_PRICE} in RuneLite 1.13.0 and earlier.
-	 * <p>
-	 * Unlike the quantity, this one never arrives as a varbit-flavoured
-	 * {@code VarbitChanged} - see {@link #read} for what that means for how it
-	 * has to be read.
+	 * The label sitting immediately above the price box. The box itself is found
+	 * by looking just past this rather than by a fixed index, so that a layout
+	 * change shifts both together instead of silently moving the price somewhere
+	 * else - the failure mode that has cost the most time here.
 	 */
-	static final int NEWOFFER_PRICE_VARBIT = 4398;
+	private static final String PRICE_LABEL = "price per item:";
+
+	/** Where the price box sat when this was written, if the label isn't found. */
+	private static final int PRICE_VALUE_FALLBACK_INDEX = 41;
+
+	/** How far past the label to look before giving up. */
+	private static final int MAX_LABEL_GAP = 12;
+
+	/**
+	 * Marks the price box apart from the quantity box just above it, which holds
+	 * a bare number. Anything offered as the price has to be denominated.
+	 */
+	private static final String COINS = "coin";
 
 	/** Cache archive holding varbit definitions - the id RuneLite's Var Inspector uses. */
 	private static final int VARBITS_ARCHIVE = 14;
 
-	/** Carries the in-game clock. It ticks every cycle, so it's pure noise in a diff. */
+	/** Carries the map clock. It ticks constantly, so it's pure noise in a diff. */
 	private static final int MAP_CLOCK_VARP = 3079;
 
-	/** Group id of the offer screens, {@code InterfaceID.GE_OFFERS}. */
-	private static final int GE_OFFERS_GROUP = 465;
+	/**
+	 * Varbits that tick on their own and drown out everything else in a var diff.
+	 * The varp they live in is resolved at runtime rather than hardcoded - an
+	 * earlier guess at that number was wrong, and the log filled with clock spam.
+	 */
+	private static final int[] CLOCK_VARBITS = {
+		VarbitID.DATE_MILLISECONDS_PAST_MINUTE,
+		VarbitID.DATE_SECONDS_PAST_MINUTE,
+	};
 
-	/** How far to scan for children when dumping the offer screen's text. */
+	/** Most watches per session, so debug mode can't run away with the log. */
+	private static final int MAX_WATCHES = 3;
+
+	/** Change lines per watch, same reason. */
+	private static final int MAX_DIFF_LINES = 120;
+
+	/** Text entries collected per pass. */
+	private static final int MAX_TEXT_ENTRIES = 150;
+
+	/** How deep into the component tree the text walk goes. */
+	private static final int MAX_TEXT_DEPTH = 3;
+
+	/** How far to scan for children when walking the group. */
 	private static final int MAX_CHILD_SCAN = 64;
 
-	/** Ceiling on dump output, so a bad guess can't flood anybody's log. */
-	private static final int MAX_DUMP_LINES = 150;
+	/** Whether the screen's text is being watched for changes. */
+	private boolean watchingText;
 
-	/**
-	 * Tri-state for whether the price varbit is still in the cache. Resolved
-	 * once per session on the client thread, because {@link Client#getVarbit}
-	 * reads the config index.
-	 */
-	private Boolean priceVarbitPresent;
+	/** Last seen text on the offer screens, keyed by component path. */
+	private Map<String, String> textSnapshot;
 
-	/** Whether the offer-setup screen was showing last time {@link #read} looked. */
-	private boolean setupVisible;
+	/** Change lines logged for the current watch, against {@link #MAX_DIFF_LINES}. */
+	private int diffLines;
 
-	/** What the price box held when the setup screen opened, i.e. the guide price. */
-	private Integer openingPrice;
+	/** Watches started this session, against {@link #MAX_WATCHES}. */
+	private int watchCount;
 
-	/** Set once the player has moved the price off {@link #openingPrice}. */
-	private boolean priceEdited;
+	/** Varps that tick on their own, resolved once from {@link #CLOCK_VARBITS}. */
+	private int[] clockVarps;
 
-	/** Varp index to the varbits living inside it, built lazily for diagnostics. */
+	/** Varp index to the varbits packed inside it, built lazily for diagnostics. */
 	private Map<Integer, List<Integer>> varbitsByVarp;
 
-	/** Varps as they were when the offer screen opened, for diffing. */
+	/** Varps as they were at the last diff, for the debug var watch. */
 	private int[] varpSnapshot;
 
 	/**
-	 * The price-per-item the player has entered on the offer-setup screen, or 0
-	 * if there isn't one to trust yet. Must be called on the client thread.
+	 * The price-per-item currently showing on the offer-setup screen, or 0 if
+	 * that screen isn't up. Must be called on the client thread.
 	 *
-	 * <p>Two things make this more involved than reading the varbit.
-	 *
-	 * <p>First, the quantity can be picked up by matching
-	 * {@code VarbitChanged.getVarbitId()} against its varbit, but the price
-	 * cannot - that event never carries this id. A price needs about 31 bits, so
-	 * it occupies essentially the whole varp and the game writes the varp
-	 * directly rather than packing bits into it, which is also the likeliest
-	 * reason the name was dropped from the cache in the first place: as a
-	 * "varbit" spanning its entire host, it is degenerate. So the value has to be
-	 * polled rather than waited for.
-	 *
-	 * <p>Second, polling it is only safe with a guard. The offers interface is
-	 * open the whole time the player is standing at a booth, and the varbit keeps
-	 * the last offer's price, so a poll at the wrong moment reports a price from
-	 * a completely unrelated offer. Hence the two conditions below: the
-	 * offer-setup screen has to actually be on screen, and the value has to have
-	 * moved off whatever it held when that screen opened. The opening value is
-	 * the guide price the box is pre-filled with, which is what the card shows
-	 * anyway, so nothing is lost by ignoring it until the player changes it.
+	 * <p>No staleness guard is needed, and none should be added: unlike a
+	 * variable, which holds the last offer's price indefinitely, a hidden screen
+	 * has no price box to read.
 	 */
 	int read(Client client)
 	{
-		if (!isPriceVarbitPresent(client))
+		Widget[] children = offerSetupChildren(client);
+		if (children == null)
 		{
 			return 0;
 		}
 
-		if (!isOfferSetupVisible(client))
+		int start = PRICE_VALUE_FALLBACK_INDEX;
+		for (int i = 0; i < children.length; i++)
 		{
-			setupVisible = false;
-			openingPrice = null;
-			priceEdited = false;
-			return 0;
-		}
-
-		int price = rawRead(client);
-		if (price <= 0)
-		{
-			return 0;
-		}
-
-		if (!setupVisible)
-		{
-			// The setup screen has just appeared. Whatever is in the box now is
-			// the pre-filled guide price, not something the player chose.
-			setupVisible = true;
-			openingPrice = price;
-			return 0;
-		}
-
-		if (!priceEdited)
-		{
-			if (openingPrice != null && price == openingPrice)
+			String text = plainText(children[i]);
+			if (text != null && PRICE_LABEL.equals(text.toLowerCase().trim()))
 			{
-				return 0;
+				start = i + 1;
+				break;
 			}
-			priceEdited = true;
 		}
 
-		return price;
-	}
+		for (int i = start; i < children.length && i < start + MAX_LABEL_GAP; i++)
+		{
+			int price = parseCoins(plainText(children[i]));
+			if (price > 0)
+			{
+				return price;
+			}
+		}
 
-	/** The varbit's current value, or 0 if it can't be read. */
-	private int rawRead(Client client)
-	{
-		try
-		{
-			int price = client.getVarbitValue(NEWOFFER_PRICE_VARBIT);
-			// A negative value would mean we're reading bits that no longer mean
-			// what we think they mean, and showing a nonsense price is worse
-			// than showing the guide price.
-			return price > 0 ? price : 0;
-		}
-		catch (RuntimeException e)
-		{
-			log.debug("Craft Cost: reading the GE offer price varbit failed", e);
-			priceVarbitPresent = Boolean.FALSE;
-			return 0;
-		}
+		return 0;
 	}
 
 	/**
-	 * Whether the offer-setup screen - the one with the quantity and price boxes
-	 * on it - is actually showing, as opposed to the offers list behind it.
+	 * The offer-setup screen's children, or null if that screen isn't showing.
 	 */
-	private boolean isOfferSetupVisible(Client client)
+	private Widget[] offerSetupChildren(Client client)
 	{
 		try
 		{
 			Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
-			return setup != null && !setup.isHidden();
+			if (setup == null || setup.isHidden())
+			{
+				return null;
+			}
+			return setup.getDynamicChildren();
 		}
 		catch (RuntimeException e)
 		{
-			return false;
+			log.debug("Craft Cost: couldn't read the GE offer-setup screen", e);
+			return null;
 		}
 	}
 
 	/**
-	 * Whether varbit {@value #NEWOFFER_PRICE_VARBIT} is still defined in the
-	 * game cache. If it isn't, live price syncing is quietly unavailable and the
-	 * cards fall back to the Grand Exchange guide price.
+	 * A widget's text with any colour tags removed, or null if it has none.
+	 * Interface text is marked up - the confirm button reads
+	 * {@code <col=ffffff>Confirm</col>} - so the tags have to come off before
+	 * anything is matched against it.
 	 */
-	private boolean isPriceVarbitPresent(Client client)
+	private static String plainText(Widget widget)
 	{
-		if (priceVarbitPresent != null)
+		if (widget == null)
 		{
-			return priceVarbitPresent;
+			return null;
 		}
 
-		boolean present;
-		try
+		String text = widget.getText();
+		if (text == null || text.isEmpty())
 		{
-			present = client.getVarbit(NEWOFFER_PRICE_VARBIT) != null;
-		}
-		catch (RuntimeException e)
-		{
-			present = false;
+			return null;
 		}
 
-		priceVarbitPresent = present;
+		return text.replaceAll("<[^>]*>", "");
+	}
 
-		if (present)
+	/**
+	 * Parses a coins amount such as {@code "1,922 coins"}, or 0 if this isn't
+	 * one. Requiring the denomination is what keeps the quantity box - a bare
+	 * number sitting a few components above - from being read as a price.
+	 */
+	static int parseCoins(String text)
+	{
+		if (text == null || !text.toLowerCase().contains(COINS))
 		{
-			log.debug("Craft Cost: live GE offer price available from varbit {}", NEWOFFER_PRICE_VARBIT);
-		}
-		else
-		{
-			log.info("Craft Cost: varbit {} is not in this client's cache, so the Grand Exchange"
-				+ " price-per-item can't be synced live. Cards will use the guide price."
-				+ " Enable \"Log GE offer screen (debug)\" to help track down its replacement.",
-				NEWOFFER_PRICE_VARBIT);
+			return 0;
 		}
 
-		return present;
+		long value = 0;
+		boolean anyDigits = false;
+		for (int i = 0; i < text.length(); i++)
+		{
+			char c = text.charAt(i);
+			if (c >= '0' && c <= '9')
+			{
+				anyDigits = true;
+				value = value * 10 + (c - '0');
+				if (value > Integer.MAX_VALUE)
+				{
+					return Integer.MAX_VALUE;
+				}
+			}
+			else if (c != ',' && c != ' ')
+			{
+				// Hit the start of the word "coins" - or something unexpected,
+				// in which case whatever has been read so far is all there is.
+				break;
+			}
+		}
+
+		return anyDigits ? (int) value : 0;
 	}
 
 	/** Forget everything cached about the client's state. */
 	void reset()
 	{
-		priceVarbitPresent = null;
+		watchingText = false;
+		textSnapshot = null;
+		diffLines = 0;
+		watchCount = 0;
+		clockVarps = null;
 		varbitsByVarp = null;
 		varpSnapshot = null;
-		setupVisible = false;
-		openingPrice = null;
-		priceEdited = false;
 	}
 
 	// ------------------------------------------------------------------
 	// Diagnostics
 	//
-	// If the varbit above ever does disappear for real, the replacement has to
-	// be found empirically. Doing that through RuneLite's Var Inspector means
-	// picking the price changes out of the clock varps that tick every cycle,
-	// and it's easy to screenshot a window that didn't contain a price change at
-	// all. The two dumps below are the same idea scoped to the offer screen:
-	// every var that moves while it's open, and every piece of text on it.
+	// These found the price box, and are kept for the next time the interface
+	// moves. They are deliberately independent of everything above: an earlier
+	// build gated them behind the price varbit, so in the one case worth
+	// diagnosing - the varbit being gone - nothing was logged at all.
 	// ------------------------------------------------------------------
 
-	/**
-	 * Called when the offer screen opens. Takes the baseline for
-	 * {@link #logChangedVars} and dumps the screen's text once.
-	 */
-	void onScreenOpened(Client client, boolean debug)
+	/** Called when the offer interface loads; takes the baseline for the var watch. */
+	void onScreenOpened(Client client)
 	{
 		int[] varps = client.getVarps();
 		if (varpSnapshot == null || varpSnapshot.length != varps.length)
@@ -250,28 +260,176 @@ final class GeOfferPrice
 			varpSnapshot = new int[varps.length];
 		}
 		System.arraycopy(varps, 0, varpSnapshot, 0, varps.length);
+	}
 
-		// Resolve varbit availability now rather than on the first price read,
-		// so the "not in cache" line lands before any confusion about why the
-		// panel isn't following the offer.
-		isPriceVarbitPresent(client);
-
-		if (debug)
+	/**
+	 * Starts watching the offer screen's text for changes.
+	 *
+	 * <p>An earlier attempt dumped the screen a fixed number of var changes after
+	 * an item was picked. That never worked: the game clock ticks several times a
+	 * second, so the delay elapsed in milliseconds and the dump caught the screen
+	 * still reading "Choose an item...". Taking a baseline and reporting only
+	 * what changes needs no delay at all, and the price box identifies itself.
+	 */
+	void requestWatch()
+	{
+		if (watchCount >= MAX_WATCHES)
 		{
-			logOfferScreenText(client);
+			return;
+		}
+
+		watchCount++;
+		textSnapshot = null;
+		diffLines = 0;
+		watchingText = true;
+	}
+
+	/** The debug hook, run on every var change while the offer screens are open. */
+	void onVarChanged(Client client, boolean debug)
+	{
+		if (!debug)
+		{
+			return;
+		}
+
+		logChangedVars(client);
+
+		if (watchingText)
+		{
+			watchScreenText(client);
 		}
 	}
 
 	/**
-	 * Logs every varp that has changed since the last call, along with the
-	 * varbits inside it - named or not. Run on each var change while the offer
-	 * screen is open, with the debug toggle on.
+	 * Takes a baseline of every piece of text on the offer screens, then on each
+	 * later call logs only what has changed since.
 	 */
-	void logChangedVars(Client client)
+	private void watchScreenText(Client client)
+	{
+		Map<String, String> current = new LinkedHashMap<>();
+		for (int child = 0; child < MAX_CHILD_SCAN; child++)
+		{
+			Widget widget = client.getWidget(GE_OFFERS_GROUP, child);
+			if (widget != null)
+			{
+				collectText(widget, GE_OFFERS_GROUP + "." + child, current, 0);
+			}
+		}
+
+		if (textSnapshot == null)
+		{
+			logOfferScreenState(client);
+			log.info("Craft Cost debug: watching {} pieces of text on group {} - adjust the price now",
+				current.size(), GE_OFFERS_GROUP);
+			textSnapshot = current;
+			return;
+		}
+
+		for (Map.Entry<String, String> entry : current.entrySet())
+		{
+			if (diffLines >= MAX_DIFF_LINES)
+			{
+				watchingText = false;
+				log.info("Craft Cost debug: stopping after {} changes", diffLines);
+				return;
+			}
+
+			String before = textSnapshot.get(entry.getKey());
+			if (!entry.getValue().equals(before))
+			{
+				log.info("Craft Cost debug:   {} : \"{}\" -> \"{}\"",
+					entry.getKey(), before == null ? "" : before, entry.getValue());
+				diffLines++;
+			}
+		}
+
+		textSnapshot = current;
+	}
+
+	/**
+	 * Gathers this widget's text and its children's into {@code into}, keyed by
+	 * the component path it came from.
+	 */
+	private void collectText(Widget widget, String path, Map<String, String> into, int depth)
+	{
+		if (into.size() >= MAX_TEXT_ENTRIES)
+		{
+			return;
+		}
+
+		String text = widget.getText();
+		if (text != null && !text.trim().isEmpty())
+		{
+			into.put(path, text);
+		}
+
+		if (depth >= MAX_TEXT_DEPTH)
+		{
+			return;
+		}
+
+		collectChildren(widget.getStaticChildren(), path, "s", into, depth);
+		collectChildren(widget.getDynamicChildren(), path, "", into, depth);
+		collectChildren(widget.getNestedChildren(), path, "n", into, depth);
+	}
+
+	private void collectChildren(Widget[] children, String path, String marker, Map<String, String> into, int depth)
+	{
+		if (children == null)
+		{
+			return;
+		}
+
+		for (int i = 0; i < children.length; i++)
+		{
+			if (children[i] != null)
+			{
+				collectText(children[i], path + "[" + marker + i + "]", into, depth + 1);
+			}
+		}
+	}
+
+	/**
+	 * Logs what the plugin can see of the offer interface, so that a watch which
+	 * reports nothing still says why.
+	 */
+	private void logOfferScreenState(Client client)
+	{
+		Widget setup = null;
+		try
+		{
+			setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+		}
+		catch (RuntimeException e)
+		{
+			// reported as absent below
+		}
+
+		log.info("Craft Cost debug: GeOffers.SETUP (465.26) is {}",
+			setup == null ? "null" : (setup.isHidden() ? "present but hidden" : "present and showing"));
+		log.info("Craft Cost debug: price read from the screen is {}", read(client));
+
+		StringBuilder visible = new StringBuilder();
+		for (int child = 0; child < MAX_CHILD_SCAN; child++)
+		{
+			Widget widget = client.getWidget(GE_OFFERS_GROUP, child);
+			if (widget != null && !widget.isHidden())
+			{
+				visible.append(visible.length() == 0 ? "" : ", ").append(child);
+			}
+		}
+		log.info("Craft Cost debug: showing children of 465: [{}]", visible);
+	}
+
+	/**
+	 * Logs every varp that has changed since the last call, along with the
+	 * varbits inside it - named or not.
+	 */
+	private void logChangedVars(Client client)
 	{
 		if (varpSnapshot == null)
 		{
-			onScreenOpened(client, false);
+			onScreenOpened(client);
 			return;
 		}
 
@@ -289,7 +447,7 @@ final class GeOfferPrice
 		{
 			int before = varpSnapshot[index];
 			int after = varps[index];
-			if (before == after || index == MAP_CLOCK_VARP)
+			if (before == after || isClockVarp(client, index))
 			{
 				continue;
 			}
@@ -309,6 +467,49 @@ final class GeOfferPrice
 		}
 
 		System.arraycopy(varps, 0, varpSnapshot, 0, varps.length);
+	}
+
+	/**
+	 * Whether this varp is one of the self-ticking clocks, whose constant churn
+	 * would otherwise bury everything else in the diff.
+	 */
+	private boolean isClockVarp(Client client, int index)
+	{
+		if (clockVarps == null)
+		{
+			List<Integer> found = new ArrayList<>();
+			found.add(MAP_CLOCK_VARP);
+			for (int varbitId : CLOCK_VARBITS)
+			{
+				try
+				{
+					VarbitComposition varbit = client.getVarbit(varbitId);
+					if (varbit != null)
+					{
+						found.add(varbit.getIndex());
+					}
+				}
+				catch (RuntimeException e)
+				{
+					// nothing to filter if it can't be resolved
+				}
+			}
+
+			clockVarps = new int[found.size()];
+			for (int i = 0; i < found.size(); i++)
+			{
+				clockVarps[i] = found.get(i);
+			}
+		}
+
+		for (int varp : clockVarps)
+		{
+			if (varp == index)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -342,88 +543,5 @@ final class GeOfferPrice
 
 		varbitsByVarp = byVarp;
 		return byVarp;
-	}
-
-	/**
-	 * Dumps every bit of text on the offer screens, with the component id it
-	 * came from. If the price is no longer in a var at all, this is where it
-	 * will be, and the component id is what the replacement would read.
-	 */
-	private void logOfferScreenText(Client client)
-	{
-		log.info("Craft Cost debug: dumping text on group {} (Grand Exchange offers)", GE_OFFERS_GROUP);
-
-		int lines = 0;
-		for (int child = 0; child < MAX_CHILD_SCAN && lines < MAX_DUMP_LINES; child++)
-		{
-			Widget widget = client.getWidget(GE_OFFERS_GROUP, child);
-			if (widget == null)
-			{
-				continue;
-			}
-
-			lines += logWidgetText(widget, GE_OFFERS_GROUP + "." + child, MAX_DUMP_LINES - lines);
-		}
-
-		if (lines == 0)
-		{
-			log.info("Craft Cost debug: no text found - is the offer-setup screen actually showing?");
-		}
-	}
-
-	/**
-	 * Logs this widget's text and its children's, returning how many lines were
-	 * written so the caller can keep to its budget.
-	 */
-	private int logWidgetText(Widget widget, String path, int budget)
-	{
-		if (budget <= 0)
-		{
-			return 0;
-		}
-
-		int lines = 0;
-
-		String text = widget.getText();
-		if (text != null && !text.trim().isEmpty())
-		{
-			log.info("Craft Cost debug:   {} type={} text=\"{}\"", path, widget.getType(), text);
-			lines++;
-		}
-
-		lines += logChildArray(widget.getStaticChildren(), path, "s", budget - lines);
-		lines += logChildArray(widget.getDynamicChildren(), path, "", budget - lines);
-		lines += logChildArray(widget.getNestedChildren(), path, "n", budget - lines);
-
-		return lines;
-	}
-
-	private int logChildArray(Widget[] children, String path, String marker, int budget)
-	{
-		if (children == null || budget <= 0)
-		{
-			return 0;
-		}
-
-		int lines = 0;
-		for (int i = 0; i < children.length && lines < budget; i++)
-		{
-			Widget child = children[i];
-			if (child == null)
-			{
-				continue;
-			}
-
-			// Only one level down. The offer screen's text sits directly on the
-			// setup component, and going deeper buries it in scrollbar parts.
-			String text = child.getText();
-			if (text != null && !text.trim().isEmpty())
-			{
-				log.info("Craft Cost debug:   {}[{}{}] type={} text=\"{}\"",
-					path, marker, i, child.getType(), text);
-				lines++;
-			}
-		}
-		return lines;
 	}
 }

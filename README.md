@@ -32,15 +32,17 @@ price-per-item tracking what you type into the offer, live, before you confirm
 it. Close the offer screen and the card goes back to the usual Grand Exchange
 price, since the offer price isn't live any more.
 
-The card follows the price from the moment you change it. Until then it shows
-the usual Grand Exchange price — which is the same number the price box opens
-pre-filled with, so there's nothing to see until you adjust it.
+The card shows whatever the **Price per item** box shows, from the moment the
+offer screen opens. The minus and plus buttons, both pairs of percentage
+buttons, any percentages you've configured yourself, and a typed-in price all
+work, because the plugin reads the box rather than trying to follow the
+buttons.
 
-The price-per-item is read from a game variable that RuneLite stopped naming in
-1.13.1, so the plugin reads it by id and checks at startup that it's still
-there. If a future update moves it, the quantity sync carries on and the cards
-fall back to the guide price rather than showing a wrong number; there'll be a
-line in the client log saying so.
+It reads the box rather than a game variable because there is no variable to
+read — the price lives only in the offer screen until you confirm. The box is
+found by its label rather than a fixed position, so a layout change moves both
+together. If it ever can't be found, the quantity sync carries on and the cards
+fall back to the guide price rather than showing a wrong number.
 
 ### Owned counts
 

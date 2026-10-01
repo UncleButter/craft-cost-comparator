@@ -16,6 +16,7 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.VarbitChanged;
@@ -70,6 +71,9 @@ public class CraftCostPlugin extends Plugin
 
 	private boolean geOfferScreenOpen;
 
+	/** Last price pushed to the panel, so an unchanged one isn't pushed again. */
+	private int lastLivePrice;
+
 	private CraftCostPanel panel;
 	private NavigationButton navButton;
 
@@ -105,6 +109,7 @@ public class CraftCostPlugin extends Plugin
 		inventoryCounts.clear();
 		bankCounts.clear();
 		geOfferScreenOpen = false;
+		lastLivePrice = 0;
 		geOfferPrice.reset();
 	}
 
@@ -124,6 +129,7 @@ public class CraftCostPlugin extends Plugin
 			inventoryCounts.clear();
 			bankCounts.clear();
 			geOfferScreenOpen = false;
+			lastLivePrice = 0;
 			geOfferPrice.reset();
 			panel.autoClearLivePrices();
 		}
@@ -150,7 +156,7 @@ public class CraftCostPlugin extends Plugin
 		if (event.getGroupId() == InterfaceID.GE_OFFERS)
 		{
 			geOfferScreenOpen = true;
-			geOfferPrice.onScreenOpened(client, config.debugGeOffer());
+			geOfferPrice.onScreenOpened(client);
 			checkGeItem();
 		}
 	}
@@ -161,6 +167,7 @@ public class CraftCostPlugin extends Plugin
 		if (event.getGroupId() == InterfaceID.GE_OFFERS)
 		{
 			geOfferScreenOpen = false;
+			lastLivePrice = 0;
 			// The cards label this price as the one on a live offer, so it stops
 			// being true the moment the offer screen goes away - whether the
 			// offer was confirmed or abandoned. Drop back to the guide price
@@ -177,13 +184,16 @@ public class CraftCostPlugin extends Plugin
 			return;
 		}
 
-		if (config.debugGeOffer())
-		{
-			geOfferPrice.logChangedVars(client);
-		}
+		geOfferPrice.onVarChanged(client, config.debugGeOffer());
 
 		if (event.getVarpId() == VarPlayerID.TRADINGPOST_SEARCH)
 		{
+			// Picking an item is what builds the offer-setup screen, so it's the
+			// cue for the debug dump - a couple of ticks later, once it exists.
+			// Outside checkGeItem deliberately: that returns early when
+			// auto-show is off, and a diagnostic shouldn't depend on a setting
+			// unrelated to what it's diagnosing.
+			geOfferPrice.requestWatch();
 			checkGeItem();
 			return;
 		}
@@ -192,14 +202,21 @@ public class CraftCostPlugin extends Plugin
 		{
 			checkGeQuantity();
 		}
+	}
 
-		// The price can't be matched to an event the way the quantity can - that
-		// event never carries its varbit id - so it gets polled on any change
-		// instead. That's only safe because GeOfferPrice.read refuses to report a
-		// price unless the offer-setup screen is up and the player has actually
-		// moved it; polling it unguarded is what made 1.0.2 show prices left over
-		// from previous offers.
-		checkGePrice();
+	/**
+	 * Adjusting the price writes no game variable at all, so there is no event to
+	 * subscribe to - it has to be read off the screen on a pulse. A client tick
+	 * is about 20ms, which makes the card feel like it moves with the buttons,
+	 * and the work is a widget lookup and a short string parse.
+	 */
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		if (geOfferScreenOpen)
+		{
+			checkGePrice();
+		}
 	}
 
 	private void checkGeItem()
@@ -263,12 +280,23 @@ public class CraftCostPlugin extends Plugin
 			return;
 		}
 
-		// Reads the price-per-item box on the offer-setup screen as it's typed.
-		// See GeOfferPrice for why this doesn't go through a VarbitID constant.
+		// Reads the price-per-item box off the offer-setup screen. See
+		// GeOfferPrice for why this isn't read from a game variable.
 		int price = geOfferPrice.read(client);
+		if (price == lastLivePrice)
+		{
+			return;
+		}
+
+		lastLivePrice = price;
 		if (price > 0)
 		{
 			panel.autoSetPrice(recipe, price);
+		}
+		else
+		{
+			// The setup screen has gone, so there is no live price any more.
+			panel.autoClearLivePrices();
 		}
 	}
 
