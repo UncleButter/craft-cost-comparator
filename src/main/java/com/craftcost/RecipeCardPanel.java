@@ -442,6 +442,28 @@ class RecipeCardPanel extends JPanel
 		}
 		detailsPanel.add(buildLevelRow(currentLevel));
 		detailsPanel.add(buildQuestRow(questState));
+
+		// Cooking can burn what you're making, so the cost above is the
+		// no-failures case. Say so where that's worth knowing.
+		if (recipe.getFailureNote() != null)
+		{
+			detailsPanel.add(buildFailureRow(currentLevel));
+		}
+	}
+
+	/**
+	 * The failure note, amber while it still applies at the player's level and
+	 * grey once it doesn't - so a glance says whether the cost above is the
+	 * number you'll actually pay.
+	 */
+	private JLabel buildFailureRow(int currentLevel)
+	{
+		JLabel label = new JLabel(recipe.getFailureNote());
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setForeground(recipe.getSafeLevel() > 0 && currentLevel >= recipe.getSafeLevel()
+			? ColorScheme.LIGHT_GRAY_COLOR
+			: ColorScheme.BRAND_ORANGE);
+		return label;
 	}
 
 	private JLabel detailLabel(String text)

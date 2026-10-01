@@ -37,6 +37,27 @@ public class Recipe
 	 */
 	int outputQuantity;
 
+	/**
+	 * A note about this recipe's failure chance, shown in the details drawer, or
+	 * null if it has none worth stating.
+	 * <p>
+	 * This is free text rather than a level, because there is no single level at
+	 * which a food stops burning: it varies with the cooking source, whether
+	 * cooking gauntlets are worn, and Hosidius favour, and several foods never
+	 * stop entirely without a Cooking cape. A couple of recipes don't burn at
+	 * all but fail another way - wine turns to bad wine below level 68 - which
+	 * no "stops burning at" number could express either. The cost figures assume
+	 * no failures, so this is what tells you when that assumption holds.
+	 */
+	String failureNote;
+
+	/**
+	 * The level at or above which {@link #failureNote} no longer applies, or 0
+	 * if it always does (or isn't known). Only used to decide whether the note
+	 * still matters to this player.
+	 */
+	int safeLevel;
+
 	@Override
 	public String toString()
 	{

@@ -334,8 +334,10 @@ final class HerbloreRecipes
 	private static Recipe recipe(int itemId, String itemName, int levelRequired, double xpPerAction, int ticks,
 		int outputQuantity, Ingredient... ingredients)
 	{
+		// Herblore has no failure chance - a mix either can't be made or succeeds -
+		// so there is no failure note to show.
 		return new Recipe(itemId, itemName, Arrays.asList(ingredients), Skill.HERBLORE, levelRequired, xpPerAction,
-			ticks, UNLOCK_QUEST, outputQuantity);
+			ticks, UNLOCK_QUEST, outputQuantity, null, 0);
 	}
 
 	private static Ingredient ingredient(int itemId, String itemName, int quantity)

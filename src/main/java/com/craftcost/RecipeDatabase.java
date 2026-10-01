@@ -27,6 +27,7 @@ final class RecipeDatabase
 	{
 		List<Recipe> all = new ArrayList<>();
 		all.addAll(HerbloreRecipes.RECIPES);
+		all.addAll(CookingRecipes.RECIPES);
 		RECIPES = Collections.unmodifiableList(all);
 	}
 
