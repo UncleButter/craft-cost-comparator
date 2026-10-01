@@ -66,6 +66,8 @@ public class CraftCostPlugin extends Plugin
 	private final Map<Integer, Integer> inventoryCounts = new ConcurrentHashMap<>();
 	private final Map<Integer, Integer> bankCounts = new ConcurrentHashMap<>();
 
+	private final GeOfferPrice geOfferPrice = new GeOfferPrice();
+
 	private boolean geOfferScreenOpen;
 
 	private CraftCostPanel panel;
@@ -102,6 +104,8 @@ public class CraftCostPlugin extends Plugin
 		clientToolbar.removeNavigation(navButton);
 		inventoryCounts.clear();
 		bankCounts.clear();
+		geOfferScreenOpen = false;
+		geOfferPrice.reset();
 	}
 
 	@Subscribe
@@ -119,6 +123,9 @@ public class CraftCostPlugin extends Plugin
 		{
 			inventoryCounts.clear();
 			bankCounts.clear();
+			geOfferScreenOpen = false;
+			geOfferPrice.reset();
+			panel.autoClearLivePrices();
 		}
 	}
 
@@ -143,6 +150,7 @@ public class CraftCostPlugin extends Plugin
 		if (event.getGroupId() == InterfaceID.GE_OFFERS)
 		{
 			geOfferScreenOpen = true;
+			geOfferPrice.onScreenOpened(client, config.debugGeOffer());
 			checkGeItem();
 		}
 	}
@@ -153,6 +161,11 @@ public class CraftCostPlugin extends Plugin
 		if (event.getGroupId() == InterfaceID.GE_OFFERS)
 		{
 			geOfferScreenOpen = false;
+			// The cards label this price as the one on a live offer, so it stops
+			// being true the moment the offer screen goes away - whether the
+			// offer was confirmed or abandoned. Drop back to the guide price
+			// rather than leaving a stale number sitting there.
+			panel.autoClearLivePrices();
 		}
 	}
 
@@ -164,14 +177,27 @@ public class CraftCostPlugin extends Plugin
 			return;
 		}
 
+		if (config.debugGeOffer())
+		{
+			geOfferPrice.logChangedVars(client);
+		}
+
 		if (event.getVarpId() == VarPlayerID.TRADINGPOST_SEARCH)
 		{
+			// Switching to a different item resets what the quantity and price
+			// boxes mean, so checkGeItem re-reads both for the new item.
 			checkGeItem();
+			return;
 		}
-		else if (event.getVarbitId() == VarbitID.GE_NEWOFFER_QUANTITY)
-		{
-			checkGeQuantity();
-		}
+
+		// Everything below is cheap - a couple of var reads and two no-op-if-
+		// unchanged setters - so rather than matching on the varbit that carries
+		// each field, just re-read them on any change while the screen is open.
+		// GE_NEWOFFER_QUANTITY survived the 1.13.1 constant cull and the price
+		// varbit didn't, and matching on ids we can't name is how the price sync
+		// broke silently the first time.
+		checkGeQuantity();
+		checkGePrice();
 	}
 
 	private void checkGeItem()
@@ -189,8 +215,9 @@ public class CraftCostPlugin extends Plugin
 		if (recipe != null)
 		{
 			panel.autoAddFromGe(recipe);
-			// pick up whatever quantity is already showing, not just future changes
+			// pick up whatever's already showing, not just future changes
 			checkGeQuantity();
+			checkGePrice();
 		}
 	}
 
@@ -219,14 +246,28 @@ public class CraftCostPlugin extends Plugin
 		}
 	}
 
-	// Live price-per-item syncing used to read varbit GE_NEWOFFER_PRICE (4398)
-	// alongside GE_NEWOFFER_QUANTITY. That varbit no longer exists - RuneLite
-	// generates VarbitID from the game cache, and 4398 was dropped after
-	// 1.13.0 - so there is nothing left to read and the feature is disabled.
-	// Quantity syncing is unaffected; GE_NEWOFFER_QUANTITY (4396) is still
-	// present. CraftCostPanel.autoSetPrice and RecipeCardPanel.setLivePrice are
-	// deliberately left in place, ready to be rewired if a replacement source
-	// for the live offer price is found.
+	private void checkGePrice()
+	{
+		if (!config.autoShowGeItem())
+		{
+			return;
+		}
+
+		int itemId = client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH);
+		Recipe recipe = RecipeDatabase.findByItemId(itemId);
+		if (recipe == null)
+		{
+			return;
+		}
+
+		// Reads the price-per-item box on the offer-setup screen as it's typed.
+		// See GeOfferPrice for why this doesn't go through a VarbitID constant.
+		int price = geOfferPrice.read(client);
+		if (price > 0)
+		{
+			panel.autoSetPrice(recipe, price);
+		}
+	}
 
 	/**
 	 * Whether the panel's "Auto-show GE item" checkbox should be ticked -

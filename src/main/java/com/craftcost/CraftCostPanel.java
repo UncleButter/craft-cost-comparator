@@ -328,6 +328,21 @@ class CraftCostPanel extends PluginPanel
 	}
 
 	/**
+	 * Called by the plugin when the Grand Exchange offer screen closes, so no
+	 * card is left showing a price from an offer that isn't on screen any more.
+	 */
+	void autoClearLivePrices()
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			for (RecipeCardPanel card : cardsByItemId.values())
+			{
+				card.clearLivePrice();
+			}
+		});
+	}
+
+	/**
 	 * Called by the plugin whenever inventory/bank contents change, so every
 	 * card in the watchlist stays up to date without a manual refresh.
 	 */

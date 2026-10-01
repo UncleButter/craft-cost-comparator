@@ -40,4 +40,16 @@ public interface CraftCostConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "debugGeOffer",
+		name = "Log GE offer screen (debug)",
+		description = "Writes every variable that changes while a Grand Exchange offer screen is open, plus the text on " +
+			"that screen, to the client log. Only useful for working out where the game keeps the offer price after a " +
+			"client update moves it. Leave this off."
+	)
+	default boolean debugGeOffer()
+	{
+		return false;
+	}
 }

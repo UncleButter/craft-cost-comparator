@@ -29,7 +29,14 @@ three makes rather than forty.
 Tick **Auto-show GE item** and whenever you open a buy offer for an item the
 plugin knows, its card is added automatically, with the quantity and
 price-per-item tracking what you type into the offer, live, before you confirm
-it.
+it. Close the offer screen and the card goes back to the usual Grand Exchange
+price, since the offer price isn't live any more.
+
+The price-per-item is read from a game variable that RuneLite stopped naming in
+1.13.1, so the plugin reads it by id and checks at startup that it's still
+there. If a future update moves it, the quantity sync carries on and the cards
+fall back to the guide price rather than showing a wrong number; there'll be a
+line in the client log saying so.
 
 ### Owned counts
 

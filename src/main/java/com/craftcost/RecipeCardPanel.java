@@ -320,6 +320,21 @@ class RecipeCardPanel extends JPanel
 	}
 
 	/**
+	 * Drops the live offer price and goes back to the usual Grand Exchange
+	 * price. A no-op if there wasn't one.
+	 */
+	void clearLivePrice()
+	{
+		if (liveUnitPrice == null)
+		{
+			return;
+		}
+
+		liveUnitPrice = null;
+		refresh();
+	}
+
+	/**
 	 * Re-reads prices and owned counts and repaints. Safe to call from
 	 * anywhere - the actual client/item lookups happen on the client thread.
 	 */
