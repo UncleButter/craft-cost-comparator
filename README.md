@@ -4,10 +4,12 @@ Is it cheaper to buy something, or to make it yourself? This plugin answers
 that in the sidebar, using live Grand Exchange prices and counting whatever
 ingredients you already have in your inventory and bank.
 
-Currently covers **109 recipes** across two skills. Herblore: standard potions,
-combination potions like super combat and stamina, herb tars, and barbarian
-mixes. Cooking: every fish and meat worth cooking, plus pies, cakes, pizzas,
-stews, bread and wine. More skills are planned.
+Currently covers **197 recipes** across three skills. Herblore: standard
+potions, combination potions like super combat and stamina, herb tars, and
+barbarian mixes. Cooking: every fish and meat worth cooking, plus pies, cakes,
+pizzas, stews, bread and wine. Fletching: arrows, darts, javelins, every bolt
+including gem-tipped, and bows and crossbows both unstrung and strung. More
+skills are planned.
 
 ## What it does
 
@@ -100,9 +102,32 @@ than the Gradle `run` task, add `-ea` to the VM options.
 Logging in with a Jagex account requires the
 [Jagex Accounts guide](https://github.com/runelite/runelite/wiki/Using-Jagex-Accounts).
 
+### One recipe per item
+
+The watchlist looks recipes up by the item they make, so each item has exactly
+one recipe. Where the game offers several routes to the same thing, the plugin
+carries the one you'd most likely take and leaves the rest out: arrow shafts
+are cut from plain logs rather than all seven log types, cooked meat comes from
+raw beef rather than all six raw meats, and a meat pie uses cooked meat rather
+than cooked chicken. The alternatives would be unreachable entries that only
+cluttered the search box.
+
+### What Fletching leaves out
+
+The blurite line is absent — limbs, bolts and crossbows — because every part of
+it is untradeable and locked behind The Knight's Sword, so there is no Grand
+Exchange price to compare against. That also removes jade bolts, which are the
+one gem bolt tipped onto blurite rather than a mainstream metal.
+
+Cutting a bow and stringing it are separate cards with separate XP, as are
+assembling a crossbow and stringing it. The figures are not always equal: the
+wiki rounds the same underlying value differently between the two steps for
+willow shortbows and maple longbows, and both are carried as printed.
+
 ## Adding recipes
 
 Recipes live in one file per skill (`HerbloreRecipes.java`,
-`CookingRecipes.java`), collected by `RecipeDatabase`. Each entry names its items through RuneLite's `ItemID`
+`CookingRecipes.java`, `FletchingRecipes.java`), collected by
+`RecipeDatabase`. Each entry names its items through RuneLite's `ItemID`
 constants rather than raw numbers, so a mistyped item is a compile error
 instead of a silently wrong price.
